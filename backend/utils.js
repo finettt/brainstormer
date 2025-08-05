@@ -20,6 +20,8 @@ function planToExcalidrawElements(planElements) {
       y,
       width,
       height,
+      angle: 0, // REQUIRED
+      isDeleted: false, // REQUIRED
       // Default styles:
       strokeColor: "#1e1e1e",
       backgroundColor: "#ffffff",

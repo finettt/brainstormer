@@ -46,9 +46,12 @@ const Whiteboard = forwardRef((props, ref) => {
     },
     updateScene: ({ elements }) => {
       if (excalidrawRef.current && typeof excalidrawRef.current.updateScene === "function") {
-        excalidrawRef.current.updateScene({ elements });
+        const currentElements = excalidrawRef.current.getSceneElements();
+        const merged = [...currentElements, ...elements];
+        excalidrawRef.current.updateScene({ elements: merged, scrollToContent: true });
       }
-    },
+    }
+
   }));
 
   return (

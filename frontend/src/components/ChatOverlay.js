@@ -27,7 +27,12 @@ export default function ChatOverlay({ whiteboardRef }) {
       }
       setChatHistory((prev) => [...prev, { sender: "bot", text: reply }]);
       if (newElements && whiteboardRef.current && whiteboardRef.current.updateScene) {
+        console.log("New Elements from server:", newElements);
+        console.log("whiteboardRef.current:", whiteboardRef.current);
+
         const { elements: current } = whiteboardRef.current.getSceneAndState();
+        console.log("Calling updateScene with:", [...current, ...newElements]);
+        console.log("AI element example:", newElements[0]);
         whiteboardRef.current.updateScene({ elements: [...current, ...newElements] });
       }
     });
