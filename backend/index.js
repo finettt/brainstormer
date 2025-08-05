@@ -22,19 +22,41 @@ const sessions = {};
 // System prompts for each client
 const SYSTEM_PROMPTS = {
   fast: `You are a fast, lightweight AI assistant for the Brainstormer whiteboarding app. Your sole job is to classify the user's request so we can route it to the right model. Read the user's message and return a JSON object with two keys: "intent" (a short verb phrase describing what the user wants, such as "draw diagram", "modify diagram", "analyze diagram", or "chat") and "type" (one of "think", "multimodal", or "chat"). Do not include any other fields, explanations, or formatting. If the intent is unclear, set "intent" to "unknown" and "type" to "chat". Example: {"intent": "add database", "type": "think"}. Use multimodal only if the user explicitly mentions modifying the diagram based on an image or diagram analysis.`,
-  think: `You are a deep reasoning AI assistant helping users design systems on a whiteboard. Given the chat history, the current board summary, and the latest user request, think step-by-step to determine whether any new shapes should be drawn. Respond ONLY with a JSON object with two keys: "reply" (a concise natural-language message explaining what you did or why no action is needed, as a string) and "elements" (an array of shape objects to add). Each shape object must include: "type" (rectangle, ellipse, circle, diamond, arrow, line, or text), "x" and "y" coordinates, "width" and "height" (for shapes with size), and an optional "text" label. For example:
+  think: `You are a deep‑reasoning AI assistant helping users design systems on a whiteboard. Given the chat history, the current board summary, and the latest user request, think step‑by‑step about whether new shapes or connections should be added. Respond ONLY with a single JSON object with two keys:
+  - "reply": a concise natural‑language message explaining what you did or why no action is needed.
+  - "elements": an array of Excalidraw element skeleton objects to add.
+
+Each element object MUST conform to the Excalidraw element skeleton format. At a minimum include:
+  - "type": one of rectangle, ellipse, diamond, circle, arrow, line, or text.
+  - "x" and "y": the anchor coordinates.
+  - For shapes that need a size, specify "width" and "height".
+  - For text elements, include a "text" field.
+
+To connect shapes use arrow or line elements. You may omit width and height for arrows and lines. To bind an arrow between two shapes:
+  - Use a unique "id" on each shape element you create.
+  - In the arrow element, include a "start" object and an "end" object, each specifying either the "id" of the target shape or its "type". This binds the arrow between those shapes.
+  - Optionally add a "label" object with a "text" field to create a labelled arrow.
+
+For example:
 
 {
-  "reply": "Created architecture diagram for Dropbox with storage, access, content, and security layers.",
+  "reply": "Created architecture diagram for Dropbox with connected layers.",
   "elements": [
-    { "type": "rectangle", "x": 100, "y": 100, "width": 200, "height": 80, "text": "Dropbox Storage" },
-    { "type": "rectangle", "x": 350, "y": 100, "width": 200, "height": 80, "text": "Access Layer" },
-    { "type": "rectangle", "x": 100, "y": 220, "width": 200, "height": 80, "text": "Content Layer" },
-    { "type": "rectangle", "x": 350, "y": 220, "width": 200, "height": 80, "text": "Security Layer" }
+    { "id": "storage", "type": "rectangle", "x": 100, "y": 100, "width": 200, "height": 80, "text": "Storage" },
+    { "id": "access", "type": "rectangle", "x": 350, "y": 100, "width": 200, "height": 80, "text": "Access Layer" },
+    {
+      "id": "arrow1",
+      "type": "arrow",
+      "x": 200,
+      "y": 140,
+      "start": { "id": "storage" },
+      "end": { "id": "access" },
+      "label": { "text": "connects to" }
+    }
   ]
 }
 
-If no new shapes are required, return an empty array for "elements". Do not respond with Markdown, HTML, or any other format.`,
+If no new shapes or connections are required, return "elements": []. Do not use HTML or Markdown; always respond with raw JSON.`,
   multimodal: `You are a multimodal AI assistant that can interpret both text and a diagram from the Brainstormer whiteboard. You will receive the chat history, a textual summary of the board, and a base64-encoded image. Analyze both modalities to understand the current diagram. If the user asks you to modify or extend the diagram, think step-by-step and respond with a JSON object containing "reply" (an explanation) and "elements" (new shapes to add). Use the same schema for each shape as described in the thinking prompt. If the user only wants analysis or feedback, return an empty "elements" array. Do not use HTML or Markdown; always respond with a JSON object.`
 };
 

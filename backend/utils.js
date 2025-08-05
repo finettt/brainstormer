@@ -2,27 +2,50 @@ const crypto = require("crypto");
 
 function planToExcalidrawElements(planElements) {
   if (!Array.isArray(planElements)) return [];
+
   return planElements.map((item) => {
     const {
-      type,
-      x,
-      y,
-      width = 100,
-      height = 60,
-      text = "",
-      // You can extend this destructure to include strokeColor, backgroundColor, etc., if the LLM provides them
-    } = item;
-
-    return {
-      id: crypto.randomUUID(),
+      id,
       type,
       x,
       y,
       width,
       height,
-      angle: 0, // REQUIRED
-      isDeleted: false, // REQUIRED
-      // Default styles:
+      text,
+      start,
+      end,
+      label,
+      points,
+    } = item;
+
+    // infer type if missing
+    let finalType = type;
+    if (!finalType) {
+      if (start || end) finalType = "arrow";
+      else if (text && !width && !height) finalType = "text";
+      else finalType = "rectangle";
+    }
+
+    // default width/height (text elements omit size)
+    let finalWidth = width;
+    let finalHeight = height;
+    if (finalType === "text") {
+      finalWidth = width ?? undefined;
+      finalHeight = height ?? undefined;
+    } else {
+      finalWidth = width ?? 100;
+      finalHeight = height ?? 60;
+    }
+
+    // base element
+    const element = {
+      id: id || crypto.randomUUID(),
+      type: finalType,
+      x,
+      y,
+      ...(finalType !== "text" && { width: finalWidth, height: finalHeight }),
+      angle: 0,
+      isDeleted: false,
       strokeColor: "#1e1e1e",
       backgroundColor: "#ffffff",
       fillStyle: "hachure",
@@ -31,10 +54,27 @@ function planToExcalidrawElements(planElements) {
       opacity: 100,
       seed: Math.floor(Math.random() * 100000),
       version: 1,
-      versionNonce: Math.floor(Math.random() * 1000000000),
-      text,
-      // Some element types (like text) may not need width/height; Excalidraw will ignore extra fields.
+      versionNonce: Math.floor(Math.random() * 1_000_000_000),
+      text: text || "",
     };
+
+    // handle linear elements (arrows/lines)
+    if (finalType === "arrow" || finalType === "line") {
+      // copy provided points, else fallback to a simple 2-point polyline
+      if (points && Array.isArray(points)) {
+        element.points = points;
+      } else {
+        const p0 = [0, 0];
+        const p1 = [finalWidth || 100, finalHeight || 0];
+        element.points = [p0, p1];
+      }
+
+      if (start) element.start = start;
+      if (end) element.end = end;
+      if (label) element.label = label;
+    }
+
+    return element;
   });
 }
 
