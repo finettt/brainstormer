@@ -23,6 +23,32 @@ const Whiteboard = forwardRef((props, ref) => {
       }
       return null;
     },
+    getSceneAndState: () => {
+      if (!excalidrawRef.current) {
+        return { elements: [], appState: {} };
+      }
+      return {
+        elements: excalidrawRef.current.getSceneElements(),
+        appState: excalidrawRef.current.getAppState(),
+      };
+    },
+    summarizeScene: () => {
+      if (!excalidrawRef.current) return '';
+      const elements = excalidrawRef.current.getSceneElements();
+      return elements.map((el) => {
+        const { type, x, y, width, height, text } = el;
+        const label = text ? ` labelled '${text}'` : '';
+        if (width && height) {
+          return `${type} at (${Math.round(x)}, ${Math.round(y)}) size ${Math.round(width)}x${Math.round(height)}${label}`;
+        }
+        return `${type} at (${Math.round(x)}, ${Math.round(y)})${label}`;
+      }).join('; ');
+    },
+    updateScene: ({ elements }) => {
+      if (excalidrawRef.current && typeof excalidrawRef.current.updateScene === "function") {
+        excalidrawRef.current.updateScene({ elements });
+      }
+    },
   }));
 
   return (

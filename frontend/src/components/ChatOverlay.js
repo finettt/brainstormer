@@ -1,48 +1,71 @@
 import React, { useState, useEffect, useRef } from "react";
-import axios from "axios";
 
+
+import { io } from "socket.io-client";
 export default function ChatOverlay({ whiteboardRef }) {
   const [message, setMessage] = useState("");
   const [chatHistory, setChatHistory] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [socket, setSocket] = useState(null);
+  const [streamingReply, setStreamingReply] = useState("");
   const textareaRef = useRef(null);
 
-  const handleSendMessage = async () => {
-    if (message.trim() === "") return;
+  useEffect(() => {
+    const s = io("http://localhost:5001", { transports: ["websocket"] });
+    setSocket(s);
 
-    setChatHistory((prevHistory) => [...prevHistory, { sender: "user", text: message }]);
-    setMessage(""); // Clear the input field
+    s.on("llm_stream", (partial) => {
+      setStreamingReply((prev) => prev + partial);
+    });
 
-    setLoading(true);
-
-    try {
-      const imageBlob = await whiteboardRef.current.exportToImage();
-
-      const formData = new FormData();
-      formData.append("message", message);
-      if (imageBlob) {
-        formData.append("image", imageBlob, "whiteboard.png");
-      }
-
-      const response = await axios.post("http://localhost:5001/api/chat", formData, {
-        headers: {
-          "Content-Type": "multipart/form-data",
-        },
-      });
-
-      setChatHistory((prevHistory) => [
-        ...prevHistory,
-        { sender: "bot", text: response.data.reply },
-      ]);
-    } catch (error) {
-      console.error("Error fetching response from backend:", error);
-      setChatHistory((prevHistory) => [
-        ...prevHistory,
-        { sender: "bot", text: "Error connecting to LLM" },
-      ]);
-    } finally {
+    s.on("plan", ({ reply, newElements, error }) => {
       setLoading(false);
-    }
+      setStreamingReply("");
+      if (error) {
+        setChatHistory((prev) => [...prev, { sender: "bot", text: error }]);
+        return;
+      }
+      setChatHistory((prev) => [...prev, { sender: "bot", text: reply }]);
+      if (newElements && whiteboardRef.current && whiteboardRef.current.updateScene) {
+        const { elements: current } = whiteboardRef.current.getSceneAndState();
+        whiteboardRef.current.updateScene({ elements: [...current, ...newElements] });
+      }
+    });
+
+    s.on("error", (err) => {
+      setLoading(false);
+      setStreamingReply("");
+      setChatHistory((prev) => [...prev, { sender: "bot", text: err }]);
+    });
+
+    return () => {
+      s.off("llm_stream");
+      s.off("plan");
+      s.off("error");
+      s.disconnect();
+    };
+    // eslint-disable-next-line
+  }, [whiteboardRef]);
+
+  const handleSendMessage = () => {
+    if (!socket || message.trim() === "") return;
+    const userMsg = { sender: "user", text: message };
+    const updatedHistory = [...chatHistory, userMsg];
+    setChatHistory(updatedHistory);
+    setMessage("");
+    setLoading(true);
+    setStreamingReply("");
+
+    const { elements, appState } = whiteboardRef.current.getSceneAndState();
+    const summary = whiteboardRef.current.summarizeScene();
+    const payload = {
+      message,
+      elements,
+      appState,
+      chatHistory: updatedHistory,
+      summary,
+    };
+    socket.emit("user_message", payload);
   };
 
   // Adjust textarea height based on content
@@ -62,7 +85,7 @@ export default function ChatOverlay({ whiteboardRef }) {
             <div style={{ whiteSpace: "pre-wrap" }}>{chat.text}</div>
           </div>
         ))}
-        {loading && <div>Loading...</div>}
+        {loading && <div>{streamingReply ? `Assistant: ${streamingReply}` : "Loading..."}</div>}
       </div>
       <div style={inputContainerStyle}>
         <textarea
@@ -80,7 +103,6 @@ export default function ChatOverlay({ whiteboardRef }) {
     </div>
   );
 }
-
 // Styles for the overlay and chat components
 const overlayStyle = {
   display: "flex",
