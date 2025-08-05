@@ -1,3 +1,4 @@
+
 const express = require("express");
 const cors = require("cors");
 const multer = require("multer");
@@ -7,84 +8,145 @@ require("dotenv").config();
 const app = express();
 app.use(cors());
 app.use(express.json());
-
 const port = process.env.PORT || 5000;
 
-const systemPrompt = `
-You are an AI assistant helping users brainstorm and develop technical solutions. Your role is to provide clear, concise, and accurate responses to technical questions, focusing on software development, system architecture, and related topics.
+// System prompts for each client
+const SYSTEM_PROMPTS = {
+  fast: `You are a fast, lightweight AI assistant for Brainstormer, an AI-powered whiteboarding tool for brainstorming, system design, and technical ideation. Your ONLY job is to analyze the user's message and classify the intent for routing. You must NEVER reply with explanations, chat, markdown, or code blocks. ONLY reply with a valid JSON object with keys: 'intent', 'type' (one of "think", "multimodal", "chat"), and any relevant metadata. Example: {"intent": "analyze image", "type": "multimodal"}. If you do not understand, reply with: {"intent": "unknown", "type": "chat"}`,
+  think: `You are a deep reasoning AI assistant. Your job is to analyze user requests, plan step-by-step, and output a structured plan for whiteboard updates. Respond with a JSON object describing the plan, elements to draw, and reasoning.`,
+  multimodal: `You are a multimodal AI assistant. Your job is to analyze both text and images, infer context from diagrams, and provide actionable insights for whiteboarding. Respond in HTML format, using lists and sections as described in the main system prompt.`
+};
 
-When responding:
-- Prioritize clarity and brevity. Break down complex explanations into smaller, digestible parts.
-- Use bullet points, lists, and short paragraphs to organize information and make it easier to scan.
-- Consider the visual context provided by the user's whiteboard drawing, which may include diagrams or sketches of systems, components, or workflows.
-- If an image is provided, use it to inform your response, making logical inferences based on typical software architecture diagrams or flowcharts.
-- Offer step-by-step guidance or suggest actionable next steps to help the user progress.
-- Use a friendly and professional tone, encouraging the user to explore further or ask follow-up questions.
+// LLM Client base class
 
-Output format:
-- The output should be in HTML format. The output will be rendered in a <div> element, so format it accordingly. 
-- Use HTML tags like <b> for bold, <ul> for unordered lists, <ol> for ordered lists, and <br> for line breaks.
-- Avoid lengthy paragraphs; aim for concise, actionable points.
+class LLMClient {
+  constructor(model, systemPrompt) {
+    this.model = model;
+    this.systemPrompt = systemPrompt;
+  }
+  buildPayload({ message, images = [] }) {
+    // Default payload, can be overridden by subclasses
+    return {
+      model: this.model,
+      messages: [
+        { role: "system", content: this.systemPrompt },
+        { role: "user", content: message, images },
+      ],
+      stream: false,
+      options: { top_p: 0.4, temperature: 0.2 }
+    };
+  }
+  async sendMessage({ message, images = [] }) {
+    const payload = this.buildPayload({ message, images });
+    const response = await axios.post("http://localhost:11434/api/chat", payload);
+    return response.data.message.content;
+  }
+}
 
-Examples:
-- Instead of writing long paragraphs, break down the response into sections with headers like <b>Overview:</b>, <b>Next Steps:</b>, or <b>Considerations:</b>.
-- Use <ul> or <ol> to list options, steps, or ideas.
+class FastLLMClient extends LLMClient {
+  constructor() {
+    super("deepseek-r1:1.5b", SYSTEM_PROMPTS.fast);
+  }
+  buildPayload({ message }) {
+    return {
+      model: this.model,
+      messages: [
+        { role: "system", content: this.systemPrompt },
+        { role: "user", content: message },
+      ],
+      stream: false,
+      think: false,
+      format: "json",
+      options: { temperature: 0.2, top_p: 0.4 }
+    };
+  }
+}
 
-Goal:
-- Help the user brainstorm effectively by providing clear, organized, and actionable insights without overwhelming them with information.
-`;
+class ThinkingLLMClient extends LLMClient {
+  constructor() {
+    super("deepseek-r1:1.5b", SYSTEM_PROMPTS.think);
+  }
+  buildPayload({ message }) {
+    return {
+      model: this.model,
+      messages: [
+        { role: "system", content: this.systemPrompt },
+        { role: "user", content: message },
+      ],
+      stream: false,
+      think: true,
+      format: "json",
+      options: { temperature: 0.4, top_p: 0.4 }
+    };
+  }
+}
 
+class MultiModalLLMClient extends LLMClient {
+  constructor() {
+    super("gemma3:latest", SYSTEM_PROMPTS.multimodal);
+  }
+  buildPayload({ message, images = [] }) {
+    return {
+      model: this.model,
+      messages: [
+        { role: "system", content: this.systemPrompt },
+        { role: "user", content: message, images },
+      ],
+      stream: false,
+      options: { temperature: 0.2, top_p: 0.4 }
+    };
+  }
+}
+
+// Factory for LLM clients
+class LLMClientFactory {
+  static getClient(type) {
+    switch (type) {
+      case "fast": return new FastLLMClient();
+      case "think": return new ThinkingLLMClient();
+      case "multimodal": return new MultiModalLLMClient();
+      default: throw new Error("Unknown LLM client type");
+    }
+  }
+}
 
 // Setup multer for handling file uploads
 const upload = multer({ storage: multer.memoryStorage() });
 
+// Routing logic
 app.post("/api/chat", upload.single("image"), async (req, res) => {
   const { message } = req.body;
   const imageBuffer = req.file ? req.file.buffer : null;
-
-  console.log("Received message:", message);
-  
-  if (imageBuffer) {
-    console.log("Received image with size:", imageBuffer.length);
-  }
+  const base64Image = imageBuffer ? imageBuffer.toString("base64") : null;
 
   try {
-    // Convert image buffer to base64 if an image is provided
-    const base64Image = imageBuffer ? imageBuffer.toString("base64") : null;
+    // Step 1: Use fast model to analyze intent
+    const fastClient = LLMClientFactory.getClient("fast");
+    const intentResponse = await fastClient.sendMessage({ message });
+    let intent;
+    try {
+      intent = JSON.parse(intentResponse);
+    } catch (e) {
+      console.error("Raw fast model response:", intentResponse);
+      throw new Error("Failed to parse intent response from fast model");
+    }
 
-    const chatPayload = {
-      model: "llava-llama3",  // Specify the model you're using
-      messages: [
-        {
-          role: "system",
-          content: systemPrompt
-        },{
-          role: "user",
-          content: message,
-          images: base64Image ? [base64Image] : [],
-        },
-      ],
-      stream: false, // Disable streaming to get a single response
-      options: {
-        top_p: 0.4,
-        temperature: 0.2
-      }
-    };
+    // Step 2: Route to appropriate model (never display fast model output)
+    let clientType = intent.type;
+    let client;
+    if (clientType === "multimodal" && base64Image) {
+      client = LLMClientFactory.getClient("multimodal");
+    } else {
+      // Default to thinking client for all other cases
+      client = LLMClientFactory.getClient("think");
+    }
 
-    console.log(chatPayload);
-
-    const response = await axios.post(
-      "http://localhost:11434/api/chat",  // Ollama’s chat endpoint
-      chatPayload
-    );
-    console.log(response.data)
-    const reply = response.data.message.content
-    console.log("Reply from Ollama:", reply);
-
+    // Step 3: Get response from routed client (only display output from thinking or multimodal client)
+    const reply = await client.sendMessage({ message, images: base64Image ? [base64Image] : [] });
     res.json({ reply });
   } catch (error) {
-    console.error("Error connecting to Ollama:", error);
-    res.status(500).json({ error: "Error fetching data from Ollama LLM" });
+    console.error("Error in LLM routing:", error);
+    res.status(500).json({ error: error.message || "Error fetching data from LLM" });
   }
 });
 
