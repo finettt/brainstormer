@@ -16,7 +16,7 @@ class DiagramBuilder {
     let x = this.xStart + existingElements.length * this.xStep;
     let y = this.yStart;
 
-    // Rectangle template
+    // Rectangle template (with text)
     const rectangle = (id, text) => ({
       id,
       type: 'rectangle',
@@ -32,16 +32,15 @@ class DiagramBuilder {
       roughness: 1,
       opacity: 100,
       groupIds: [],
+      locked: false,
       text,
       fontSize: 20,
       fontFamily: 1,
       textAlign: 'center',
-      verticalAlign: 'middle',
-      points: [],
-      locked: false
+      verticalAlign: 'middle'
     });
 
-    // Diamond template
+    // Diamond template (with text)
     const diamond = (id, text) => ({
       ...rectangle(id, text),
       type: 'diamond'
@@ -70,33 +69,44 @@ class DiagramBuilder {
       locked: false
     });
 
-    let boxId;
+    let boxId, shapeType, label;
     if (lower.includes('user')) {
       boxId = 'user_' + existingElements.length;
-      elements.push(rectangle(boxId, 'User'));
+      shapeType = 'rectangle';
+      label = 'User';
+      elements.push(rectangle(boxId, label));
     } else if (lower.includes('load balancer')) {
       boxId = 'lb_' + existingElements.length;
-      elements.push(diamond(boxId, 'Load Balancer'));
+      shapeType = 'diamond';
+      label = 'Load Balancer';
+      elements.push(diamond(boxId, label));
     } else if (lower.includes('backend server') || lower.includes('server')) {
       boxId = 'server_' + existingElements.length;
-      elements.push(rectangle(boxId, 'Backend Server'));
+      shapeType = 'rectangle';
+      label = 'Backend Server';
+      elements.push(rectangle(boxId, label));
     } else if (lower.includes('blob storage') || lower.includes('storage')) {
       boxId = 'storage_' + existingElements.length;
-      elements.push(rectangle(boxId, 'Blob Storage'));
+      shapeType = 'rectangle';
+      label = 'Blob Storage';
+      elements.push(rectangle(boxId, label));
     } else {
       boxId = 'box_' + existingElements.length;
-      elements.push(rectangle(boxId, stepDesc));
+      shapeType = 'rectangle';
+      label = stepDesc;
+      elements.push(rectangle(boxId, label));
     }
 
     // Add arrow from previous element to current
-    if (existingElements.length > 0) {
-      const prev = existingElements[existingElements.length - 1];
-      const prevX = prev.x + (prev.width || 120);
-      const prevY = prev.y + (prev.height || 60) / 2;
-      const curr = elements[0];
-      const currX = curr.x;
-      const currY = curr.y + (curr.height || 60) / 2;
-      elements.push(arrow('arrow_' + existingElements.length, prev.id, curr.id, prevX, prevY, currX, currY));
+    // Find previous shape (not text)
+    const prevShape = existingElements.slice().reverse().find(e => e.type === 'rectangle' || e.type === 'diamond');
+    if (prevShape) {
+      const prevX = prevShape.x + (prevShape.width || 120);
+      const prevY = prevShape.y + (prevShape.height || 60) / 2;
+      const currShape = elements.find(e => e.id === boxId);
+      const currX = currShape.x;
+      const currY = currShape.y + (currShape.height || 60) / 2;
+      elements.push(arrow('arrow_' + existingElements.length, prevShape.id, currShape.id, prevX, prevY, currX, currY));
     }
 
     return elements;
