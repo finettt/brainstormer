@@ -7,7 +7,24 @@ const http = require("http");
 const { Server } = require("socket.io");
 const crypto = require("crypto");
 const { planToExcalidrawElements } = require("./utils");
+const DiagramBuilder = require("./diagramBuilder");
+const diagramBuilder = new DiagramBuilder();
+
+// === LLM Config ===
 require("dotenv").config();
+const LLM_CONFIG = {
+  provider: process.env.LLM_PROVIDER || 'ollama', // 'ollama' or 'openai'
+  modelNames: {
+    fast: process.env.LLM_MODEL_FAST || 'deepseek-r1:1.5b',
+    think: process.env.LLM_MODEL_THINK || 'deepseek-r1:1.5b',
+    multimodal: process.env.LLM_MODEL_MULTIMODAL || 'deepseek-r1:1.5b',
+    plan: process.env.LLM_MODEL_PLAN || 'deepseek-r1:1.5b',
+  },
+  openaiApiKey: process.env.OPENAI_API_KEY || '',
+  ollamaUrl: process.env.OLLAMA_URL || 'http://localhost:11434/api/chat',
+  openaiUrl: process.env.OPENAI_URL || 'https://api.openai.com/v1/chat/completions',
+};
+
 
 const app = express();
 app.use(cors());
@@ -15,7 +32,7 @@ app.use(express.json());
 const port = process.env.PORT || 5000;
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
-
+console.log(`[SERVER] Starting server with LLM Config: ${JSON.stringify(LLM_CONFIG)}`);
 // In-memory session store
 const sessions = {};
 
@@ -56,10 +73,41 @@ For example:
   ]
 }
 
-If no new shapes or connections are required, return "elements": []. Do not use HTML or Markdown; always respond with raw JSON.`,
+If no new shapes or connections are required, return "elements": []. Do not use HTML or Markdown; always respond with raw JSON.
+
+You will be called with a description of a single step. Only add shapes needed for that step. Do not draw future components.`,
   multimodal: `You are a multimodal AI assistant that can interpret both text and a diagram from the Brainstormer whiteboard. You will receive the chat history, a textual summary of the board, and a base64-encoded image. Analyze both modalities to understand the current diagram. If the user asks you to modify or extend the diagram, think step-by-step and respond with a JSON object containing "reply" (an explanation) and "elements" (new shapes to add). Use the same schema for each shape as described in the thinking prompt. If the user only wants analysis or feedback, return an empty "elements" array. Do not use HTML or Markdown; always respond with a JSON object.`
+  ,
+  plan: `You are a planning agent. Given a high-level system design request, respond ONLY with a JSON array of short, actionable, ordered step descriptions required to build the diagram. STRICT RULES: (1) Do NOT repeat or restate the user prompt. (2) Do NOT return an object or any explanation. (3) Do NOT include the user prompt as a step. (4) If you cannot break down the task, return an array with a single short step, not the full prompt. (5) Each entry should describe a single component or connection to draw, e.g. ["Create a user box", "Add a load balancer", "Add backend server", "Add blob storage"]. Only output a JSON array.`
 };
 
+function extractPlanSteps(planRaw, message) {
+  let planSteps;
+  try {
+    planSteps = JSON.parse(planRaw);
+    if (!Array.isArray(planSteps)) {
+      if (typeof planSteps === 'object') {
+        const values = Object.values(planSteps);
+        if (values.length === 1 && (values[0] === message || values[0].toLowerCase().includes(message.toLowerCase()))) {
+          planSteps = ["Break down the system into components and connections."];
+        } else {
+          planSteps = values;
+        }
+      } else if (typeof planSteps === 'string') {
+        if (planSteps === message || planSteps.toLowerCase().includes(message.toLowerCase())) {
+          planSteps = ["Break down the system into components and connections."];
+        } else {
+          planSteps = [planSteps];
+        }
+      }
+    }
+    planSteps = planSteps.filter(s => typeof s === 'string' && !s.toLowerCase().includes(message.toLowerCase()));
+    if (planSteps.length === 0) planSteps = ["Break down the system into components and connections."];
+  } catch (e) {
+    planSteps = ["Break down the system into components and connections."];
+  }
+  return planSteps;
+}
 // LLM Client base class
 
 class LLMClient {
@@ -68,7 +116,6 @@ class LLMClient {
     this.systemPrompt = systemPrompt;
   }
   buildPayload({ message, images = [] }) {
-    // Default payload, can be overridden by subclasses
     return {
       model: this.model,
       messages: [
@@ -81,14 +128,78 @@ class LLMClient {
   }
   async sendMessage({ message, images = [] }) {
     const payload = this.buildPayload({ message, images });
-    const response = await axios.post("http://localhost:11434/api/chat", payload);
-    return response.data.message.content;
+    let response;
+    if (LLM_CONFIG.provider === 'ollama') {
+      response = await axios.post(LLM_CONFIG.ollamaUrl, payload);
+      return response.data.message.content;
+    } else if (LLM_CONFIG.provider === 'openai') {
+      // OpenAI expects model and messages, plus API key
+      const openaiPayload = {
+        model: this.model,
+        messages: [
+          { role: "system", content: this.systemPrompt },
+          { role: "user", content: message },
+        ],
+        stream: false,
+        temperature: payload.options.temperature,
+        top_p: payload.options.top_p
+      };
+      // Use the OpenAI URL from config (should be /v1/responses for latest API)
+      const openaiResponsesUrl = LLM_CONFIG.openaiUrl;
+      const responsesPayload = {
+        model: this.model,
+        input: [
+          { role: "system", content: this.systemPrompt },
+          { role: "user", content: message }
+        ],
+        stream: false,
+        temperature: payload.options.temperature,
+        top_p: payload.options.top_p
+      };
+      try {
+        response = await axios.post(
+          openaiResponsesUrl,
+          responsesPayload,
+          {
+            headers: {
+              'Authorization': `Bearer ${LLM_CONFIG.openaiApiKey}`,
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+        // OpenAI Responses API: output is in response.data.output[0].content[0].text
+        if (
+          response.data &&
+          Array.isArray(response.data.output) &&
+          response.data.output.length > 0 &&
+          response.data.output[0].content &&
+          Array.isArray(response.data.output[0].content) &&
+          response.data.output[0].content.length > 0 &&
+          response.data.output[0].content[0].text
+        ) {
+          return response.data.output[0].content[0].text;
+        } else {
+          console.error('[OpenAI API] Unexpected response:', JSON.stringify(response.data, null, 2));
+          throw new Error('OpenAI API did not return expected output[0].content[0].text. See server logs for details.');
+        }
+      } catch (err) {
+        if (err.response) {
+          console.error('[OpenAI API] Error response:', JSON.stringify(err.response.data, null, 2));
+          throw new Error(`OpenAI API error: ${err.response.data.error?.message || 'Unknown error'}`);
+        } else {
+          console.error('[OpenAI API] Request error:', err);
+          throw new Error('OpenAI API request failed. See server logs for details.');
+        }
+      }
+    } else {
+      throw new Error('Unknown LLM provider');
+    }
   }
 }
 
 class FastLLMClient extends LLMClient {
   constructor() {
-    super("deepseek-r1:1.5b", SYSTEM_PROMPTS.fast);
+    super(LLM_CONFIG.modelNames.fast, SYSTEM_PROMPTS.fast);
   }
   buildPayload({ message }) {
     return {
@@ -107,7 +218,7 @@ class FastLLMClient extends LLMClient {
 
 class ThinkingLLMClient extends LLMClient {
   constructor() {
-    super("deepseek-r1:1.5b", SYSTEM_PROMPTS.think);
+    super(LLM_CONFIG.modelNames.think, SYSTEM_PROMPTS.think);
   }
   buildPayload({ message }) {
     return {
@@ -126,7 +237,7 @@ class ThinkingLLMClient extends LLMClient {
 
 class MultiModalLLMClient extends LLMClient {
   constructor() {
-    super("deepseek-r1:1.5b", SYSTEM_PROMPTS.multimodal);
+    super(LLM_CONFIG.modelNames.multimodal, SYSTEM_PROMPTS.multimodal);
   }
   buildPayload({ message, images = [] }) {
     return {
@@ -142,42 +253,46 @@ class MultiModalLLMClient extends LLMClient {
 }
 
 // Factory for LLM clients
+class PlanningLLMClient extends LLMClient {
+  constructor() {
+    super(LLM_CONFIG.modelNames.plan, SYSTEM_PROMPTS.plan);
+  }
+  buildPayload({ message }) {
+    return {
+      model: this.model,
+      messages: [
+        { role: "system", content: this.systemPrompt },
+        { role: "user", content: message }
+      ],
+      stream: false,
+      format: "json",
+      options: { temperature: 0.3, top_p: 0.4 }
+    };
+  }
+}
+
 class LLMClientFactory {
   static getClient(type) {
     switch (type) {
       case "fast": return new FastLLMClient();
       case "think": return new ThinkingLLMClient();
       case "multimodal": return new MultiModalLLMClient();
+      case "plan": return new PlanningLLMClient();
       default: throw new Error("Unknown LLM client type");
     }
   }
 }
 
-function safeParseJSON(input) {
-  try {
-    let parsed = input;
-    while (typeof parsed === "string" && parsed.trim().startsWith("{")) {
-      parsed = JSON.parse(parsed);
-    }
-    return parsed;
-  } catch (e) {
-    console.warn("Failed to fully parse JSON:", input);
-    return { reply: input, elements: [] };
-  }
-}
-
 function forceParseLLMJSON(input) {
   try {
-    // If input is already an object
     if (typeof input === "object") return input;
-
-    // Clean up leading bad brace (e.g., '{"{"reply"...}' → '{"reply"...}')
-    if (typeof input === "string" && input.startsWith('{"{')) {
-      const idx = input.indexOf('{"reply":');
-      if (idx !== -1) input = input.substring(idx);
-    }
-
-    let parsed = input;
+    let str = String(input).trim();
+    // Remove leading/trailing braces and newlines
+    str = str.replace(/^[\s{]+/, '{').replace(/[\s}]+$/, '}');
+    // Try to extract the first JSON object in the string
+    const match = str.match(/\{[\s\S]*\}/);
+    if (match) str = match[0];
+    let parsed = str;
     // Unwrap multiple layers of JSON strings
     while (typeof parsed === "string" && parsed.trim().startsWith("{")) {
       parsed = JSON.parse(parsed);
@@ -233,89 +348,113 @@ app.post("/api/chat", upload.single("image"), async (req, res) => {
 // Socket.io connection handler
 io.on("connection", (socket) => {
   const sessionId = socket.id;
+  console.log(`[SOCKET] Client connected: ${sessionId}`);
+  // Execution phase handler: continue_step
+  socket.on("continue_step", async () => {
+    const session = sessions[sessionId];
+    if (!session || session.planComplete) {
+      console.log(`[THINKING] No session or plan complete for sessionId: ${sessionId}`);
+      socket.emit("step_done", { reply: "Plan complete", newElements: [] });
+      return;
+    }
+    const stepDesc = session.planSteps[session.currentStep];
+    const { elements } = session;
+    const summary = JSON.stringify(elements);
+    console.log(`[THINKING] Executing step ${session.currentStep}: ${stepDesc}`);
+    const thinkClient = LLMClientFactory.getClient("think");
+    const llmPayload = {
+      message: `Current step: ${stepDesc}. Your job is to implement only this step. Current board summary: ${summary}`,
+      images: []
+    };
+    try {
+      const llmReplyRaw = await thinkClient.sendMessage(llmPayload);
+      console.log(`[THINKING] Raw LLM reply:`, llmReplyRaw);
+      const llmReply = forceParseLLMJSON(llmReplyRaw);
+      console.log(`[THINKING] Parsed LLM reply:`, llmReply);
+      let aiElements = planToExcalidrawElements(llmReply.elements);
+      // Fallback: if no elements, use DiagramBuilder
+      if (!aiElements || aiElements.length === 0) {
+        aiElements = diagramBuilder.buildElements(stepDesc, session.elements);
+        console.log(`[THINKING] Fallback DiagramBuilder elements:`, aiElements);
+      }
+      session.elements = [...session.elements, ...aiElements];
+      session.currentStep += 1;
+      if (session.currentStep >= session.planSteps.length) session.planComplete = true;
+      socket.emit("step_done", {
+        reply: llmReply.reply || "Added diagram elements.",
+        newElements: aiElements,
+        nextStepIndex: session.currentStep,
+        planComplete: session.planComplete
+      });
+    } catch (err) {
+      console.error(`[THINKING] Error during step execution:`, err);
+      socket.emit("step_done", { reply: `Error: ${err.message || "Unknown error"}`, newElements: [], nextStepIndex: session.currentStep, planComplete: session.planComplete });
+    }
+  });
   sessions[sessionId] = {
     chatHistory: [],
     elements: [],
     appState: {},
-    summary: ""
+    summary: "",
+    planSteps: [],
+    currentStep: 0,
+    planComplete: false
   };
+  // Planning phase handler
+  socket.on("plan_request", async (payload) => {
+    try {
+      const { message } = payload;
+      console.log(`[PLANNING] Received plan_request for:`, message);
+      const planningClient = LLMClientFactory.getClient("plan");
+      const planRaw = await planningClient.sendMessage({ message });
+      console.log(`[PLANNING] Raw plan response:`, planRaw);
+      const planSteps = extractPlanSteps(planRaw, message);
+      console.log(`[PLANNING] Parsed plan steps:`, planSteps);
+      sessions[sessionId].planSteps = Array.isArray(planSteps) ? planSteps : [];
+      sessions[sessionId].currentStep = 0;
+      sessions[sessionId].planComplete = false;
+      socket.emit("plan_generated", { steps: sessions[sessionId].planSteps });
+    } catch (err) {
+      console.error(`[PLANNING] Error in planning phase:`, err);
+      socket.emit("plan_generated", { error: err.message || "Unknown error" });
+    }
+  });
 
   socket.on("user_message", async (payload) => {
     try {
+      console.log(`[SOCKET] Received user_message from ${sessionId}`);
       const { message, elements, appState, chatHistory, systemPrompt } = payload;
       // Update session state
       sessions[sessionId].chatHistory = chatHistory || [];
       sessions[sessionId].elements = elements || [];
       sessions[sessionId].appState = appState || {};
-      // For now, summary is just JSON.stringify of elements
       sessions[sessionId].summary = JSON.stringify(elements || []);
 
-      // Use fast client to classify intent
-      const fastClient = LLMClientFactory.getClient("fast");
-      console.log(`[LLM] Sending to fast model:`, message);
-      const intentResponse = await fastClient.sendMessage({ message });
-      console.log(`[LLM] Fast model response:`, intentResponse);
-      let intent;
-      try {
-        intent = JSON.parse(intentResponse);
-      } catch (e) {
-        console.error("Raw fast model response:", intentResponse);
-        socket.emit("plan", { error: "Failed to parse intent response from fast model" });
+      // If no plan exists, trigger planning phase (call planning logic directly)
+      if (!sessions[sessionId].planSteps || sessions[sessionId].planSteps.length === 0) {
+        try {
+          console.log(`[PLANNING] Received plan_request for:`, message);
+          const planningClient = LLMClientFactory.getClient("plan");
+          const planRaw = await planningClient.sendMessage({ message });
+          console.log(`[PLANNING] Raw plan response:`, planRaw);
+          const planSteps = extractPlanSteps(planRaw, message);
+          console.log(`[PLANNING] Parsed plan steps:`, planSteps);
+          sessions[sessionId].planSteps = Array.isArray(planSteps) ? planSteps : [];
+          sessions[sessionId].currentStep = 0;
+          sessions[sessionId].planComplete = false;
+          socket.emit("plan_generated", { steps: sessions[sessionId].planSteps });
+        } catch (err) {
+          console.error(`[PLANNING] Error in planning phase:`, err);
+          socket.emit("plan_generated", { error: err.message || "Unknown error" });
+        }
         return;
       }
 
-      // Choose LLM client
-      let clientType = intent.type;
-      let client;
-      if (clientType === "multimodal") {
-        client = LLMClientFactory.getClient("multimodal");
-      } else {
-        client = LLMClientFactory.getClient("think");
-      }
-
-      // Build LLM payload
-      const llmPayload = {
-        message: message,
-        images: [], // We'll add PNG support later
-        // Optionally, you could pass more context here
-      };
-
-      // Call LLM client
-      let llmReplyRaw;
-      try {
-        console.log(`[LLM] Sending to ${clientType} model:`, llmPayload);
-        llmReplyRaw = await client.sendMessage(llmPayload);
-        console.log(`[LLM] ${clientType} model response:`, llmReplyRaw);
-      } catch (err) {
-        console.error(`[LLM] Error from ${clientType} model:`, err);
-        socket.emit("plan", { error: "LLM error: " + (err.message || "Unknown error") });
-        return;
-      }
-
-      // Parse LLM response (expect JSON string with at least reply, optionally elements)
-      let llmReply = forceParseLLMJSON(llmReplyRaw);
-
-
-      // Debug logging for LLM reply and elements
-      console.log('[LLM] Parsed reply:', llmReply);
-      console.log('[LLM] Elements before conversion:', llmReply.elements);
-
-      // Convert LLM elements to Excalidraw format
-      const aiElements = planToExcalidrawElements(llmReply.elements);
-
-      // Update session's elements array
-      sessions[sessionId].elements = [
-        ...(sessions[sessionId].elements || []),
-        ...aiElements
-      ];
-
-      // Append assistant reply to chat history
-      sessions[sessionId].chatHistory.push({ role: "assistant", content: llmReply.reply });
-
-      // Emit plan event to originating socket
-      socket.emit("plan", {
-        reply: llmReply.reply,
-        newElements: aiElements
+      // Otherwise, continue with current step (or let frontend trigger continue_step)
+      socket.emit("step_ready", {
+        nextStepIndex: sessions[sessionId].currentStep,
+        planSteps: sessions[sessionId].planSteps,
+        planComplete: sessions[sessionId].planComplete
       });
     } catch (err) {
       socket.emit("plan", { error: err.message || "Unknown error" });
@@ -323,6 +462,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("disconnect", () => {
+    console.log(`[SOCKET] Client disconnected: ${socket.id}`);
     delete sessions[sessionId];
   });
 });

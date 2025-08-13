@@ -8,6 +8,8 @@ export default function ChatOverlay({ whiteboardRef }) {
   const [loading, setLoading] = useState(false);
   const [socket, setSocket] = useState(null);
   const [streamingReply, setStreamingReply] = useState("");
+  const [plan, setPlan] = useState([]);
+  const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const textareaRef = useRef(null);
 
   useEffect(() => {
@@ -16,6 +18,31 @@ export default function ChatOverlay({ whiteboardRef }) {
 
     s.on("llm_stream", (partial) => {
       setStreamingReply((prev) => prev + partial);
+    });
+
+    s.on("plan_generated", ({ steps, error }) => {
+      setLoading(false);
+      setStreamingReply("");
+      if (error) {
+        setChatHistory((prev) => [...prev, { sender: "bot", text: error }]);
+        setPlan([]);
+        setCurrentStepIndex(0);
+        return;
+      }
+      setPlan(steps || []);
+      setCurrentStepIndex(0);
+    });
+
+    s.on("step_done", ({ reply, newElements, nextStepIndex, planComplete }) => {
+      setLoading(false);
+      setStreamingReply("");
+      setChatHistory((prev) => [...prev, { sender: "bot", text: reply }]);
+      if (newElements && whiteboardRef.current && whiteboardRef.current.updateScene) {
+        const { elements: current } = whiteboardRef.current.getSceneAndState();
+        whiteboardRef.current.updateScene({ elements: [...current, ...newElements] });
+      }
+      if (nextStepIndex !== undefined) setCurrentStepIndex(nextStepIndex);
+      // Optionally handle planComplete
     });
 
     s.on("plan", ({ reply, newElements, error }) => {
@@ -27,12 +54,7 @@ export default function ChatOverlay({ whiteboardRef }) {
       }
       setChatHistory((prev) => [...prev, { sender: "bot", text: reply }]);
       if (newElements && whiteboardRef.current && whiteboardRef.current.updateScene) {
-        console.log("New Elements from server:", newElements);
-        console.log("whiteboardRef.current:", whiteboardRef.current);
-
         const { elements: current } = whiteboardRef.current.getSceneAndState();
-        console.log("Calling updateScene with:", [...current, ...newElements]);
-        console.log("AI element example:", newElements[0]);
         whiteboardRef.current.updateScene({ elements: [...current, ...newElements] });
       }
     });
@@ -45,6 +67,8 @@ export default function ChatOverlay({ whiteboardRef }) {
 
     return () => {
       s.off("llm_stream");
+      s.off("plan_generated");
+      s.off("step_done");
       s.off("plan");
       s.off("error");
       s.disconnect();
@@ -92,6 +116,28 @@ export default function ChatOverlay({ whiteboardRef }) {
         ))}
         {loading && <div>{streamingReply ? `Assistant: ${streamingReply}` : "Loading..."}</div>}
       </div>
+      {/* Plan display and Next Step button */}
+      {plan.length > 0 && (
+        <div style={{ padding: "10px", borderTop: "1px solid #eee" }}>
+          <h4>Plan</h4>
+          <ol>
+            {plan.map((step, idx) => (
+              <li key={idx} style={{ fontWeight: idx === currentStepIndex ? 'bold' : 'normal' }}>
+                {step}
+              </li>
+            ))}
+          </ol>
+          {currentStepIndex < plan.length && (
+            <button
+              onClick={() => socket.emit("continue_step")}
+              disabled={loading}
+              style={buttonStyle}
+            >
+              {loading ? "Working..." : "Next Step"}
+            </button>
+          )}
+        </div>
+      )}
       <div style={inputContainerStyle}>
         <textarea
           ref={textareaRef}
