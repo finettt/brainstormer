@@ -43,16 +43,15 @@ const SYSTEM_PROMPTS = {
   - "reply": a concise natural‑language message explaining what you did or why no action is needed.
   - "elements": an array of Excalidraw element skeleton objects to add.
 
-Each element object MUST conform to the Excalidraw element skeleton format. At a minimum include:
-  - "type": one of rectangle, ellipse, diamond, circle, arrow, line, or text.
+Each element object MUST conform to the Excalidraw element skeleton format. For shapes (rectangle, ellipse, diamond, etc.), always include a "text" property inside the shape object for the label. For arrows, reference the shape ids using the "start" and "end" properties, and use correct anchor coordinates for "x", "y", and "points". Do NOT use a separate label or text element for shape labels.
+
+At a minimum include:
+  - "type": one of rectangle, ellipse, diamond, circle, arrow, or line.
   - "x" and "y": the anchor coordinates.
   - For shapes that need a size, specify "width" and "height".
-  - For text elements, include a "text" field.
+  - For shapes, include a "text" property for the label.
 
-To connect shapes use arrow or line elements. You may omit width and height for arrows and lines. To bind an arrow between two shapes:
-  - Use a unique "id" on each shape element you create.
-  - In the arrow element, include a "start" object and an "end" object, each specifying either the "id" of the target shape or its "type". This binds the arrow between those shapes.
-  - Optionally add a "label" object with a "text" field to create a labelled arrow.
+To connect shapes use arrow or line elements. Reference the shape ids in the arrow's "start" and "end" properties.
 
 For example:
 
@@ -67,8 +66,7 @@ For example:
       "x": 200,
       "y": 140,
       "start": { "id": "storage" },
-      "end": { "id": "access" },
-      "label": { "text": "connects to" }
+      "end": { "id": "access" }
     }
   ]
 }

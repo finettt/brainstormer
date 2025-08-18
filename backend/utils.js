@@ -56,6 +56,9 @@ function planToExcalidrawElements(planElements) {
       version: 1,
       versionNonce: Math.floor(Math.random() * 1_000_000_000),
       text: text || "",
+      label: {
+        "text": text || "",
+      }
     };
 
     // handle linear elements (arrows/lines)
