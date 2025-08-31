@@ -35,6 +35,53 @@ console.log(`[SERVER] Starting server with LLM Config: ${JSON.stringify(LLM_CONF
 // In-memory session store
 const sessions = {};
 
+// === Context / Token Management Helpers ===
+const MAX_BOARD_CHARS = parseInt(process.env.MAX_BOARD_CHARS || '6000', 10); // limit board JSON contribution
+const MAX_CHAT_MESSAGES = parseInt(process.env.MAX_CHAT_MESSAGES || '10', 10); // tail chat messages to send
+const MAX_USER_MESSAGE_CHARS = parseInt(process.env.MAX_USER_MESSAGE_CHARS || '4000', 10);
+
+function slimElements(elements = []) {
+  return elements.map(e => {
+    const { id, type, text, x, y, width, height, start, end } = e;
+    const base = { id, type };
+    if (text) base.text = text.slice(0, 120);
+    if (typeof x === 'number') base.x = Math.round(x);
+    if (typeof y === 'number') base.y = Math.round(y);
+    if (typeof width === 'number') base.width = Math.round(width);
+    if (typeof height === 'number') base.height = Math.round(height);
+    if (start && start.id) base.start = { id: start.id };
+    if (end && end.id) base.end = { id: end.id };
+    return base;
+  });
+}
+
+function buildBoardContext(elements) {
+  try {
+    const slim = slimElements(elements || []);
+    let json = JSON.stringify(slim);
+    if (json.length > MAX_BOARD_CHARS) {
+      json = json.slice(0, MAX_BOARD_CHARS) + '...';
+    }
+    return json;
+  } catch (e) {
+    return '[]';
+  }
+}
+
+function tailChat(chatHistory = []) {
+  if (chatHistory.length <= MAX_CHAT_MESSAGES) return chatHistory;
+  const trimmed = chatHistory.slice(-MAX_CHAT_MESSAGES);
+  return trimmed;
+}
+
+function approximateTokenLength(str='') { return Math.ceil(str.length / 4); }
+
+function enforceMessageSize(message) {
+  if (!message) return '';
+  if (message.length <= MAX_USER_MESSAGE_CHARS) return message;
+  return message.slice(0, MAX_USER_MESSAGE_CHARS) + '...';
+}
+
 // System prompts for each client
 const SYSTEM_PROMPTS = {
   fast: `You are a fast, lightweight AI assistant for the Brainstormer whiteboarding app. Your sole job is to classify the user's request so we can route it to the right model. Read the user's message and return a JSON object with two keys: "intent" (a short verb phrase describing what the user wants, such as "draw diagram", "modify diagram", "analyze diagram", or "chat") and "type" (one of "think", "multimodal", or "chat"). Do not include any other fields, explanations, or formatting. If the intent is unclear, set "intent" to "unknown" and "type" to "chat". Example: {"intent": "add database", "type": "think"}. Use multimodal only if the user explicitly mentions modifying the diagram based on an image or diagram analysis.`,
@@ -403,7 +450,14 @@ io.on("connection", (socket) => {
       const { message } = payload;
       console.log(`[PLANNING] Received plan_request for:`, message);
       const planningClient = LLMClientFactory.getClient("plan");
-      const planRaw = await planningClient.sendMessage({ message });
+      const boardCtx = sessions[sessionId].elements?.length ? ` Current board JSON: ${buildBoardContext(sessions[sessionId].elements)}` : '';
+      const userMsg = enforceMessageSize(message);
+      let composed = userMsg + boardCtx;
+      // Rough guardrail if still huge
+      if (approximateTokenLength(composed) > 6000) {
+        composed = composed.slice(0, 20000) + '...';
+      }
+      const planRaw = await planningClient.sendMessage({ message: composed });
       console.log(`[PLANNING] Raw plan response:`, planRaw);
       const planSteps = extractPlanSteps(planRaw, message);
       console.log(`[PLANNING] Parsed plan steps:`, planSteps);
@@ -432,7 +486,13 @@ io.on("connection", (socket) => {
         try {
           console.log(`[PLANNING] Received plan_request for:`, message);
           const planningClient = LLMClientFactory.getClient("plan");
-          const planRaw = await planningClient.sendMessage({ message });
+          const boardCtx = sessions[sessionId].elements?.length ? ` Current board JSON: ${buildBoardContext(sessions[sessionId].elements)}` : '';
+          const userMsg = enforceMessageSize(message);
+          let composed = userMsg + boardCtx;
+          if (approximateTokenLength(composed) > 6000) {
+            composed = composed.slice(0, 20000) + '...';
+          }
+          const planRaw = await planningClient.sendMessage({ message: composed });
           console.log(`[PLANNING] Raw plan response:`, planRaw);
           const planSteps = extractPlanSteps(planRaw, message);
           console.log(`[PLANNING] Parsed plan steps:`, planSteps);
@@ -455,6 +515,35 @@ io.on("connection", (socket) => {
       });
     } catch (err) {
       socket.emit("plan", { error: err.message || "Unknown error" });
+    }
+  });
+
+  // Free-form chat / modification handler (no multi-step planning unless explicitly requested)
+  socket.on("chat_message", async (payload) => {
+    try {
+      const { message, elements, appState, chatHistory } = payload;
+      sessions[sessionId].chatHistory = chatHistory || [];
+      sessions[sessionId].elements = elements || [];
+      sessions[sessionId].appState = appState || {};
+  const boardJSON = buildBoardContext(elements || []);
+  const trimmedHistory = tailChat(chatHistory || []);
+  const historyText = trimmedHistory.map(h => `${h.sender}: ${enforceMessageSize(h.text)}`).join("\n");
+      const thinkingClient = LLMClientFactory.getClient("think");
+  const userMsg = enforceMessageSize(message);
+  const thinkPrompt = `You are collaborating with the user on a whiteboard. Board elements JSON: ${boardJSON}. Recent chat (tail):\n${historyText}\nUser request: ${userMsg}. If the user wants purely to chat, just respond conversationally (still JSON with reply and empty elements). If the user requests changes to the diagram, return new elements ONLY for those changes.`;
+      const raw = await thinkingClient.sendMessage({ message: thinkPrompt });
+      const parsed = forceParseLLMJSON(raw);
+      let aiElements = [];
+      if (Array.isArray(parsed.elements) && parsed.elements.length > 0) {
+        aiElements = planToExcalidrawElements(parsed.elements, elements || []);
+      }
+      if (aiElements.length > 0) {
+        sessions[sessionId].elements = [...sessions[sessionId].elements, ...aiElements];
+      }
+      socket.emit("chat_reply", { reply: parsed.reply || raw, newElements: aiElements });
+    } catch (err) {
+      console.error(`[CHAT] Error handling chat_message:`, err);
+      socket.emit("chat_reply", { reply: `Error: ${err.message || 'Unknown error'}`, newElements: [] });
     }
   });
 

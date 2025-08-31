@@ -36,12 +36,12 @@ const Whiteboard = forwardRef((props, ref) => {
       if (!excalidrawRef.current) return '';
       const elements = excalidrawRef.current.getSceneElements();
       return elements.map((el) => {
-        const { type, x, y, width, height, text } = el;
-        const label = text ? ` labelled '${text}'` : '';
+        const { id, type, x, y, width, height, text } = el;
+        const label = text ? ` label='${text}'` : '';
         if (width && height) {
-          return `${type} at (${Math.round(x)}, ${Math.round(y)}) size ${Math.round(width)}x${Math.round(height)}${label}`;
+          return `[${id}] ${type} (${Math.round(x)},${Math.round(y)}) ${Math.round(width)}x${Math.round(height)}${label}`;
         }
-        return `${type} at (${Math.round(x)}, ${Math.round(y)})${label}`;
+        return `[${id}] ${type} (${Math.round(x)},${Math.round(y)})${label}`;
       }).join('; ');
     },
     updateScene: ({ elements }) => {

@@ -10,10 +10,11 @@ export default function ChatOverlay({ whiteboardRef }) {
   const [streamingReply, setStreamingReply] = useState("");
   const [plan, setPlan] = useState([]);
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
+  const [mode, setMode] = useState("plan"); // 'plan' | 'chat'
   const textareaRef = useRef(null);
 
   useEffect(() => {
-    const s = io("http://localhost:5001", { transports: ["websocket"] });
+  const s = io("http://localhost:5001", { transports: ["websocket"] });
     setSocket(s);
 
     s.on("llm_stream", (partial) => {
@@ -45,6 +46,16 @@ export default function ChatOverlay({ whiteboardRef }) {
       // Optionally handle planComplete
     });
 
+    s.on("chat_reply", ({ reply, newElements }) => {
+      setLoading(false);
+      setStreamingReply("");
+      setChatHistory((prev) => [...prev, { sender: "bot", text: reply }]);
+      if (newElements && newElements.length && whiteboardRef.current && whiteboardRef.current.updateScene) {
+        const { elements: current } = whiteboardRef.current.getSceneAndState();
+        whiteboardRef.current.updateScene({ elements: [...current, ...newElements] });
+      }
+    });
+
     s.on("plan", ({ reply, newElements, error }) => {
       setLoading(false);
       setStreamingReply("");
@@ -70,6 +81,7 @@ export default function ChatOverlay({ whiteboardRef }) {
       s.off("plan_generated");
       s.off("step_done");
       s.off("plan");
+  s.off("chat_reply");
       s.off("error");
       s.disconnect();
     };
@@ -94,7 +106,11 @@ export default function ChatOverlay({ whiteboardRef }) {
       chatHistory: updatedHistory,
       summary,
     };
-    socket.emit("user_message", payload);
+    if (mode === 'plan') {
+      socket.emit("user_message", payload);
+    } else {
+      socket.emit("chat_message", payload);
+    }
   };
 
   // Adjust textarea height based on content
@@ -117,7 +133,7 @@ export default function ChatOverlay({ whiteboardRef }) {
         {loading && <div>{streamingReply ? `Assistant: ${streamingReply}` : "Loading..."}</div>}
       </div>
       {/* Plan display and Next Step button */}
-      {plan.length > 0 && (
+      {mode === 'plan' && plan.length > 0 && (
         <div style={{ padding: "10px", borderTop: "1px solid #eee" }}>
           <h4>Plan</h4>
           <ol>
@@ -139,6 +155,10 @@ export default function ChatOverlay({ whiteboardRef }) {
         </div>
       )}
       <div style={inputContainerStyle}>
+        <select value={mode} onChange={(e) => setMode(e.target.value)} style={modeSelectStyle}>
+          <option value="plan">Plan Mode</option>
+          <option value="chat">Chat Mode</option>
+        </select>
         <textarea
           ref={textareaRef}
           value={message}
@@ -201,4 +221,12 @@ const buttonStyle = {
   border: "none",
   borderRadius: "4px",
   cursor: "pointer",
+};
+
+const modeSelectStyle = {
+  marginRight: "10px",
+  padding: "6px 8px",
+  border: "1px solid #ccc",
+  borderRadius: "4px",
+  background: "#fff",
 };
