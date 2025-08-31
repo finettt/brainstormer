@@ -116,7 +116,6 @@ function buildArrow({
   id = uuid(),
   startElement,
   endElement,
-  // If x,y or points not provided we compute from element centers
   x,
   y,
   points,
@@ -132,12 +131,46 @@ function buildArrow({
     x: endElement.x + (endElement.width || 0) / 2,
     y: endElement.y + (endElement.height || 0) / 2,
   };
-  const dx = endCenter.x - startCenter.x;
-  const dy = endCenter.y - startCenter.y;
+  let dx = endCenter.x - startCenter.x;
+  let dy = endCenter.y - startCenter.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len;
+  const uy = dy / len;
 
-  const baseX = x !== undefined ? x : startCenter.x;
-  const baseY = y !== undefined ? y : startCenter.y;
-  const arrowPoints = points || [ [0,0], [dx, dy] ];
+  function boundaryPoint(shape, dirX, dirY) {
+    const w = shape.width || 0;
+    const h = shape.height || 0;
+    if (shape.type === 'diamond') {
+      // diamond equation |x/(w/2)| + |y/(h/2)| = 1
+      const denom = (Math.abs(dirX) / (w / 2)) + (Math.abs(dirY) / (h / 2)) || 1;
+      const t = 1 / denom; // distance along unit direction from center
+      return {
+        x: (shape.x + w / 2) + dirX * t,
+        y: (shape.y + h / 2) + dirY * t,
+      };
+    }
+    // rectangle
+    const halfW = w / 2;
+    const halfH = h / 2;
+    const tx = dirX === 0 ? Infinity : halfW / Math.abs(dirX);
+    const ty = dirY === 0 ? Infinity : halfH / Math.abs(dirY);
+    const t = Math.min(tx, ty);
+    return {
+      x: (shape.x + halfW) + dirX * t,
+      y: (shape.y + halfH) + dirY * t,
+    };
+  }
+
+  // Start boundary uses +direction, end boundary uses -direction from end center
+  const startBoundary = boundaryPoint(startElement, ux, uy);
+  const endBoundary = boundaryPoint(endElement, -ux, -uy);
+
+  dx = endBoundary.x - startBoundary.x;
+  dy = endBoundary.y - startBoundary.y;
+
+  const baseX = x !== undefined ? x : startBoundary.x;
+  const baseY = y !== undefined ? y : startBoundary.y;
+  const arrowPoints = points || [[0, 0], [dx, dy]];
 
   return {
     id,
