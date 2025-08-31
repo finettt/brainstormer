@@ -1,4 +1,3 @@
-
 const express = require("express");
 const cors = require("cors");
 const multer = require("multer");
@@ -369,7 +368,7 @@ io.on("connection", (socket) => {
       console.log(`[THINKING] Raw LLM reply:`, llmReplyRaw);
       const llmReply = forceParseLLMJSON(llmReplyRaw);
       console.log(`[THINKING] Parsed LLM reply:`, llmReply);
-      let aiElements = planToExcalidrawElements(llmReply.elements);
+      let aiElements = planToExcalidrawElements(llmReply.elements, session.elements);
       // Fallback: if no elements, use DiagramBuilder
       if (!aiElements || aiElements.length === 0) {
         aiElements = diagramBuilder.buildElements(stepDesc, session.elements);

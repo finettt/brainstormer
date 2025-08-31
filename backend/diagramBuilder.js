@@ -1,4 +1,5 @@
 // DiagramBuilder: deterministic Excalidraw element generator for system diagrams
+const { buildShape, buildArrow, buildText, approxTextWidth } = require('./elementFactory');
 
 class DiagramBuilder {
   constructor() {
@@ -6,121 +7,113 @@ class DiagramBuilder {
     this.yStart = 100;
     this.xStep = 250;
     this.yStep = 120;
-    this.registry = {};
-    this.version = 1;
+  }
+
+  // Helper: build map of label(lower)->shape
+  _buildLabelIndex(existingElements) {
+    const textByContainer = {};
+    for (const el of existingElements) {
+      if (el.type === 'text' && el.containerId && el.originalText) {
+        textByContainer[el.containerId] = el.originalText;
+      }
+    }
+    const labelMap = {}; // labelLower -> shape
+    for (const el of existingElements) {
+      if (el.type !== 'arrow' && el.type !== 'text') {
+        const label = textByContainer[el.id] || el.customLabel;
+        if (label) labelMap[label.toLowerCase()] = el;
+      }
+    }
+    return labelMap;
+  }
+
+  _extractLabels(stepLower) {
+    const known = [
+      'user',
+      'load balancer',
+      'application server', 'backend server', 'server',
+      'dropbox service', 'dropbox',
+      'blob storage', 'storage',
+      'upload interface', 'upload component', 'upload'
+    ];
+    const found = [];
+    for (const k of known) if (stepLower.includes(k) && !found.includes(k)) found.push(k);
+    return found;
+  }
+
+  _normalizePrimaryLabel(raw) {
+    if (!raw) return raw;
+    if (raw.includes('load balancer')) return 'Load Balancer';
+    if (raw.includes('application server') || raw.includes('backend server') || raw === 'server') return 'Application Server';
+    if (raw.includes('blob storage') || raw === 'storage') return 'Blob Storage';
+    if (raw.includes('upload interface') || raw.includes('upload component') || raw === 'upload') return 'Upload Interface';
+    if (raw.includes('dropbox')) return 'Dropbox Service';
+    if (raw.includes('user')) return 'User';
+    return raw;
   }
 
   // Main entry: returns Excalidraw element skeletons for a given step
   buildElements(stepDesc, existingElements = []) {
     const lower = stepDesc.toLowerCase();
-    let elements = [];
-    let x = this.xStart + existingElements.length * this.xStep;
-    let y = this.yStart;
-    let boxId, shapeType, label;
+    const labelIndex = this._buildLabelIndex(existingElements);
 
-    // Helper: create full skeleton for shapes
-    const baseShape = (id, type, text) => ({
-      id,
-      type,
-      x,
-      y,
-      width: 120,
-      height: 60,
-      angle: 0,
-      strokeColor: '#000000',
-      backgroundColor: type === 'diamond' ? '#e0e0e0' : '#ffffff',
-      fillStyle: 'solid',
-      strokeWidth: 2,
-      roughness: 1,
-      opacity: 100,
-      groupIds: [],
-      locked: false,
-      text,
-      fontSize: 20,
-      fontFamily: 1,
-      textAlign: 'center',
-      verticalAlign: 'middle',
-      version: this.version++
-    });
+    const isConnection = /(arrow|connect|link|line)/.test(lower);
 
-    // Registry for id lookup
-    const registry = { ...this.registry };
-
-    if (lower.includes('user')) {
-      boxId = 'user_' + existingElements.length;
-      shapeType = 'rectangle';
-      label = 'User';
-      elements.push(baseShape(boxId, shapeType, label));
-      registry[boxId] = { x, y, width: 120, height: 60 };
-    } else if (lower.includes('load balancer')) {
-      boxId = 'lb_' + existingElements.length;
-      shapeType = 'diamond';
-      label = 'Load Balancer';
-      elements.push(baseShape(boxId, shapeType, label));
-      registry[boxId] = { x, y, width: 120, height: 60 };
-    } else if (lower.includes('backend server') || lower.includes('server')) {
-      boxId = 'server_' + existingElements.length;
-      shapeType = 'rectangle';
-      label = 'Backend Server';
-      elements.push(baseShape(boxId, shapeType, label));
-      registry[boxId] = { x, y, width: 120, height: 60 };
-    } else if (lower.includes('blob storage') || lower.includes('storage')) {
-      boxId = 'storage_' + existingElements.length;
-      shapeType = 'rectangle';
-      label = 'Blob Storage';
-      elements.push(baseShape(boxId, shapeType, label));
-      registry[boxId] = { x, y, width: 120, height: 60 };
-    } else {
-      boxId = 'box_' + existingElements.length;
-      shapeType = 'rectangle';
-      label = stepDesc;
-      elements.push(baseShape(boxId, shapeType, label));
-      registry[boxId] = { x, y, width: 120, height: 60 };
+    if (isConnection) {
+      // Try parse "from X to Y"
+      let fromLabel, toLabel;
+      const m = lower.match(/from (.+?) to (.+)/);
+      if (m) {
+        fromLabel = this._normalizePrimaryLabel(m[1].trim());
+        toLabel = this._normalizePrimaryLabel(m[2].trim());
+      } else {
+        const labels = this._extractLabels(lower).map(l => this._normalizePrimaryLabel(l));
+        if (labels.length >= 2) {
+          fromLabel = labels[0];
+          toLabel = labels[1];
+        }
+      }
+      if (fromLabel && toLabel) {
+        const fromShape = labelIndex[fromLabel.toLowerCase()];
+        const toShape = labelIndex[toLabel.toLowerCase()];
+        if (fromShape && toShape) {
+          // Ensure we don't already have an arrow between these two (simple check)
+          const hasExistingArrow = existingElements.some(el => el.type === 'arrow' && el.startBinding && el.endBinding && ((el.startBinding.elementId === fromShape.id && el.endBinding.elementId === toShape.id) || (el.startBinding.elementId === toShape.id && el.endBinding.elementId === fromShape.id)));
+          if (!hasExistingArrow) return [buildArrow({ startElement: fromShape, endElement: toShape })];
+        }
+        // If one side missing, try reconcile arrows that plan skipped: return []
+      }
+      return [];
     }
 
-    // Arrow template (full skeleton, no label)
-    const arrow = (id, startId, endId, startAnchor, endAnchor) => ({
-      id,
-      type: 'arrow',
-      x: startAnchor.x,
-      y: startAnchor.y,
-      width: Math.abs(endAnchor.x - startAnchor.x),
-      height: Math.abs(endAnchor.y - startAnchor.y),
-      angle: 0,
-      strokeColor: '#000000',
-      backgroundColor: 'transparent',
-      fillStyle: 'solid',
-      strokeWidth: 2,
-      roughness: 1,
-      opacity: 100,
-      groupIds: [],
-      points: [[0,0],[endAnchor.x - startAnchor.x, endAnchor.y - startAnchor.y]],
-      start: { id: startId },
-      end: { id: endId },
-      locked: false,
-      version: this.version++
-    });
+    // Shape creation
+    let label;
+    if (lower.includes('load balancer')) label = 'Load Balancer';
+    else if (lower.includes('backend server') || lower.includes('application server') || (lower.includes(' server') && !lower.includes('dropbox'))) label = 'Application Server';
+    else if (lower.includes('blob storage') || (lower.includes('storage') && !lower.includes('blob storage arrow'))) label = 'Blob Storage';
+    else if (lower.includes('upload interface') || lower.includes('upload component') || (lower.includes('upload') && !lower.includes('upload arrow'))) label = 'Upload Interface';
+    else if (lower.includes('dropbox')) label = 'Dropbox Service';
+    else if (lower.includes('user')) label = 'User';
+    else label = stepDesc;
 
-    // Find previous shape (not text)
-    const prevShape = existingElements.slice().reverse().find(e => e.type === 'rectangle' || e.type === 'diamond');
-    if (prevShape) {
-      // Use registry for anchor points
-      const prevAnchor = {
-        x: prevShape.x + (prevShape.width || 120),
-        y: prevShape.y + (prevShape.height || 60) / 2
-      };
-      const currShape = elements.find(e => e.id === boxId);
-      const currAnchor = {
-        x: currShape.x,
-        y: currShape.y + (currShape.height || 60) / 2
-      };
-      elements.push(arrow('arrow_' + existingElements.length, prevShape.id, currShape.id, prevAnchor, currAnchor));
-    }
+    if (labelIndex[label.toLowerCase()]) return [];
 
-    // Update registry for next call
-    this.registry = { ...registry };
+    const shapeCount = existingElements.filter(e => e.type !== 'arrow' && e.type !== 'text').length;
+    const x = this.xStart + shapeCount * this.xStep;
+    const y = this.yStart;
 
-    return elements;
+    const shapeType = label === 'Load Balancer' ? 'diamond' : 'rectangle';
+    const shape = buildShape({ type: shapeType, x, y, customLabel: label });
+    // dynamic text size & centering
+    const textWidth = Math.min(shape.width - 16, approxTextWidth(label, 20));
+    const textEl = buildText({ text: label, x: x + (shape.width - textWidth)/2, y: y + (shape.height - 24)/2, width: textWidth, containerId: shape.id });
+    shape.boundElements.push({ id: textEl.id, type: 'text' });
+
+    const existingShapes = existingElements.filter(e => e.type !== 'arrow' && e.type !== 'text');
+    const prevShape = existingShapes[existingShapes.length - 1];
+    const out = [shape, textEl];
+    if (prevShape) out.push(buildArrow({ startElement: prevShape, endElement: shape }));
+    return out;
   }
 }
 
