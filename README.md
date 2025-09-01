@@ -43,10 +43,10 @@ Brainstormer is an innovative tool designed to enhance your brainstorming sessio
 
 ### Roadmap
 - [ ] Set System Prompt Using User Input: Allow users to customize the system prompt for the AI, tailoring responses to specific needs and preferences.
-- [ ] Pass Chat History to the Chat Completion API: Instead of only sending the most recent message, the full chat history will be passed to the API, enabling the AI to maintain context over longer conversations.
-- [ ] Convert Whiteboard Elements to Text: Enhance the AI's understanding by exporting scene elements from Excalidraw and converting them to text, rather than just using an image.
-- [ ] Add LLM Router: Implement a router that intelligently directs chat input to either a pure LLM or a vision-enabled LLM based on the type of question.
-- [ ] Function Calling for Whiteboard Updates: Introduce function calling capabilities, allowing the AI to directly add new elements to the whiteboard based on the conversation.
+- [X] Pass Chat History to the Chat Completion API: Instead of only sending the most recent message, the full chat history will be passed to the API, enabling the AI to maintain context over longer conversations.
+- [X] Convert Whiteboard Elements to Text: Enhance the AI's understanding by exporting scene elements from Excalidraw and converting them to text, rather than just using an image.
+- [X] Add LLM Router: Implement a router that intelligently directs chat input to either a pure LLM or a vision-enabled LLM based on the type of question.
+- [X] Function Calling for Whiteboard Updates: Introduce function calling capabilities, allowing the AI to directly add new elements to the whiteboard based on the conversation.
 
 ### Acknowledgements
 * [Excalidraw](https://excalidraw.com/) for the whiteboard functionality.
