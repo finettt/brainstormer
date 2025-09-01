@@ -10,6 +10,12 @@ Brainstormer is an innovative tool designed to enhance your brainstorming sessio
 - **Multimodal Interaction**: Export your whiteboard as an image and use it as context within the chat, allowing the AI to provide more relevant and targeted advice.
 - **Responsive Design**: The layout adapts to different screen sizes, providing a seamless experience whether on desktop or mobile devices.
 
+
+
+https://github.com/user-attachments/assets/544e39b2-6181-47a1-98b4-32ac5cf32efd
+
+
+
 ## Getting Started
 
 ### Prerequisites
