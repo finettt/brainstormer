@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: brainstormer_backend
+    restart: unless-stopped
+    environment:
+      - LLM_PROVIDER=ollama
+      - LLM_MODEL_FAST=deepseek-r1:1.5b
+      - LLM_MODEL_THINK=deepseek-r1:1.5b
+      - LLM_MODEL_MULTIMODAL=deepseek-r1:1.5b
+      - LLM_MODEL_PLAN=deepseek-r1:1.5b
+      - OLLAMA_URL=http://host.docker.internal:11434/api/chat
+      - PORT=5000
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./backend:/app
+    networks:
+      - brainstormer_network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: brainstormer_frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - brainstormer_network
+
+networks:
+  brainstormer_network:
+    driver: bridge
