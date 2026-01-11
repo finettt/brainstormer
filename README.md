@@ -47,6 +47,40 @@ https://github.com/user-attachments/assets/544e39b2-6181-47a1-98b4-32ac5cf32efd
     ```
 5. Open your browser and navigate to http://localhost:3000 to start using Brainstormer.
 
+### Docker Deployment
+
+Brainstormer can be deployed using Docker or Podman with the provided `docker-compose.yml` file.
+
+#### Prerequisites
+- Docker or Podman installed
+- Docker Compose or Podman Compose
+
+#### Quick Start
+
+```bash
+# Build and start containers
+docker-compose up -d
+# or with Podman:
+podman-compose up -d
+
+# Access the application at http://localhost
+```
+
+#### Configuration
+
+Create a `.env` file based on `.env.example`:
+
+```bash
+cp .env.example .env
+```
+
+Edit the `.env` file to configure your LLM provider and models.
+
+#### Services
+
+- **Frontend**: http://localhost (port 80)
+- **Backend API**: http://localhost:5000
+
 ### Roadmap
 - [ ] Set System Prompt Using User Input: Allow users to customize the system prompt for the AI, tailoring responses to specific needs and preferences.
 - [X] Pass Chat History to the Chat Completion API: Instead of only sending the most recent message, the full chat history will be passed to the API, enabling the AI to maintain context over longer conversations.
