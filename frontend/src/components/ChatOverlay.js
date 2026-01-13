@@ -14,7 +14,8 @@ export default function ChatOverlay({ whiteboardRef }) {
   const textareaRef = useRef(null);
 
   useEffect(() => {
-  const s = io("http://localhost:5001", { transports: ["websocket"] });
+    const socketUrl = '/';
+    const s = io(socketUrl, { transports: ["websocket"] });
     setSocket(s);
 
     s.on("llm_stream", (partial) => {
